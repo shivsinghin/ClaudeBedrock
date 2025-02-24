@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude Bedrock</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/github.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/9.1.2/marked.min.js"></script>
+    <style>
+        body {
+            font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: linear-gradient(135deg, #E7F0FF 0%, #4B84FF 100%);
+            margin: 0;
+            padding: 0;
+        }
+
+        /* Add styles for sticky header with blur effect */
+        .header-blur {
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            background-color: rgba(255, 255, 255, 0.8);
+        }
+        .markdown-content h1 {
+            font-size: 18px;
+            font-weight: 700;
+            margin-top: 1.5rem;
+            margin-bottom: 1rem;
+            color: #1a202c;
+        }
+
+        .markdown-content h2 {
+            font-size: 16px;
+            font-weight: 600;
+            margin-top: 1.25rem;
+            margin-bottom: 0.75rem;
+            color: #2d3748;
+        }
+
+        .markdown-content h3 {
+            font-size: 14px;
+            font-weight: 600;
+            margin-top: 1rem;
+            margin-bottom: 0.5rem;
+            color: #4a5568;
+        }
+
+        .markdown-content p {
+            margin-bottom: 1rem;
+            line-height: 1.6;
+        }
+
+        .markdown-content ul, .markdown-content ol {
+            margin-left: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        .markdown-content li {
+            margin-bottom: 0.5rem;
+        }
+
+        .markdown-content blockquote {
+            border-left: 4px solid #e2e8f0;
+            padding-left: 1rem;
+            margin: 1rem 0;
+            color: #4a5568;
+        }
+
+        .markdown-content hr {
+            margin: 2rem 0;
+            border: 0;
+            border-top: 2px solid #e2e8f0;
+        }
+
+        .markdown-content table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+
+        .markdown-content th, .markdown-content td {
+            border: 1px solid #e2e8f0;
+            padding: 0.5rem;
+        }
+
+        .markdown-content th {
+            background-color: #f7fafc;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="w-full min-h-screen bg-white flex flex-col">
+        <!-- Sticky Header -->
+        <div class="sticky top-0 z-50 header-blur border-b border-gray-200">
+            <div class="max-w-4xl mx-auto px-4">
+                <div class="flex items-center justify-between h-16">
+                    <div class="flex items-center">
+                        <a href="/" class="flex items-center gap-2">
+                            <img src="/assets/logo-light.png" alt="Logo" class="h-12">
+                        </a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Chat Container with proper padding for fixed elements -->
+        <div class="flex-1 overflow-y-auto">
+            <div class="max-w-4xl mx-auto px-4 pb-24">
+                <div id="chatContainer" class="space-y-6 py-4"></div>
+            </div>
+        </div>
+
+        <!-- Fixed Input Area -->
+        <div class="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200">
+            <div class="max-w-4xl mx-auto px-4 py-4">
+                <div class="flex gap-4">
+                    <input type="text" id="userInput" 
+                        class="flex-1 p-3 rounded-lg border border-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        placeholder="Type your message...">
+                    <button id="sendButton" 
+                            class="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+                        Send
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Initialize markdown and syntax highlighting
+        marked.setOptions({
+            highlight: function(code, lang) {
+                if (lang && hljs.getLanguage(lang)) {
+                    return hljs.highlight(code, { language: lang }).value;
+                }
+                return code;
+            },
+            breaks: true,
+            gfm: true,
+            headerIds: true,
+            headerPrefix: 'heading-',
+            mangle: false,
+            pedantic: false,
+            sanitize: false,
+            smartLists: true,
+            smartypants: true
+        });
+
+        class ChatInterface {
+            constructor() {
+                this.sessionId = this.getOrCreateSessionId();
+                this.chatContainer = document.getElementById('chatContainer');
+                this.userInput = document.getElementById('userInput');
+                this.sendButton = document.getElementById('sendButton');
+                this.setupEventListeners();
+                this.setupFileUpload();
+
+                // Initialize with async operation
+                (async () => {
+                    await this.checkServerStatus();
+                    this.loadChatHistory();
+                })();
+            }
+
+            // Add this new method
+            async checkServerStatus() {
+                try {
+                    const response = await fetch('/api/server-status');
+                    const { startTime } = await response.json();
+                    const lastServerTime = localStorage.getItem('serverStartTime');
+
+                    // If server was restarted, clear chat history
+                    if (!lastServerTime || parseInt(lastServerTime) < startTime) {
+                        localStorage.clear(); // Clear all localStorage items
+                        this.chatContainer.innerHTML = ''; // Clear displayed messages
+                        localStorage.setItem('serverStartTime', startTime);
+                        this.sessionId = this.getOrCreateSessionId(); // Generate new session ID
+                    }
+                } catch (error) {
+                    console.error('Failed to check server status:', error);
+                }
+            }
+
+            setupEventListeners() {
+                // Add click event for send button
+                this.sendButton.addEventListener('click', () => this.sendMessage());
+
+                // Add enter key event for input field
+                this.userInput.addEventListener('keypress', (e) => {
+                    if (e.key === 'Enter') {
+                        e.preventDefault();
+                        this.sendMessage();
+                    }
+                });
+            }
+
+            // Add these new methods
+            getOrCreateSessionId() {
+                let sessionId = localStorage.getItem('chatSessionId');
+                if (!sessionId) {
+                    sessionId = Date.now().toString();
+                    localStorage.setItem('chatSessionId', sessionId);
+                }
+                return sessionId;
+            }
+
+            saveMessageToLocalStorage(role, content) {
+                const history = JSON.parse(localStorage.getItem('chatHistory') || '[]');
+                history.push({ role, content });
+                localStorage.setItem('chatHistory', JSON.stringify(history));
+            }
+
+            async loadChatHistory() {
+                await this.checkServerStatus(); // Wait for server status check
+                const history = JSON.parse(localStorage.getItem('chatHistory') || '[]');
+                history.forEach(msg => {
+                    this.addMessage(msg.role, msg.content);
+                });
+            }
+
+            // Modify the addMessage method
+            addMessage(role, content) {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = 'p-4 rounded-lg ' + 
+                    (role === 'user' ? 'bg-blue-50 ml-12' : 'bg-gray-50 mr-12 markdown-content');
+
+                if (role === 'user') {
+                    messageDiv.textContent = content;
+                } else {
+                    messageDiv.innerHTML = marked.parse(content);
+                    messageDiv.querySelectorAll('pre code').forEach(block => {
+                        hljs.highlightElement(block);
+                        const container = block.parentElement;
+                        const copyButton = document.createElement('button');
+                        copyButton.className = 'copy-button absolute right-2 top-2 px-2 py-1 text-sm bg-white/10 rounded hover:bg-white/20';
+                        copyButton.textContent = 'Copy';
+                        copyButton.onclick = () => {
+                            navigator.clipboard.writeText(block.textContent);
+                            copyButton.textContent = 'Copied!';
+                            setTimeout(() => copyButton.textContent = 'Copy', 2000);
+                        };
+                        container.style.position = 'relative';
+                        container.appendChild(copyButton);
+                    });
+                }
+
+                this.chatContainer.appendChild(messageDiv);
+                this.scrollToBottom();
+            }
+
+            scrollToBottom() {
+                window.scrollTo({
+                    top: document.body.scrollHeight,
+                    behavior: 'smooth'
+                });
+            }
+
+            // Modify the sendMessage method
+            setupFileUpload() {
+                const fileInput = document.createElement('input');
+                fileInput.type = 'file';
+                fileInput.id = 'fileInput';
+                fileInput.className = 'hidden';
+                fileInput.accept = '.png,.jpg,.jpeg,.gif,.webp,.pdf,.txt,.doc,.docx';
+
+                const uploadButton = document.createElement('button');
+                uploadButton.className = 'px-3 py-3 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors';
+                uploadButton.innerHTML = '<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>';
+
+                document.querySelector('.flex.gap-4').prepend(fileInput);
+                document.querySelector('.flex.gap-4').prepend(uploadButton);
+
+                uploadButton.onclick = () => fileInput.click();
+
+                fileInput.onchange = async () => {
+                    const file = fileInput.files[0];
+                    if (file) {
+                        uploadButton.innerHTML = file.name;
+                    }
+                };
+            }
+
+            async sendMessage() {
+                const message = this.userInput.value.trim();
+                if (!message) return;
+
+                const fileInput = document.getElementById('fileInput');
+                const file = fileInput.files[0];
+
+                this.addMessage('user', message);
+                this.saveMessageToLocalStorage('user', message);
+                this.userInput.value = '';
+                this.sendButton.disabled = true;
+
+                try {
+                    let response;
+                    if (file) {
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        formData.append('query', message);
+                        formData.append('sessionId', this.sessionId);
+
+                        response = await fetch('/api/upload-and-query', {
+                            method: 'POST',
+                            body: formData
+                        });
+                    } else {
+                        response = await fetch('/api/chat', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                message,
+                                sessionId: this.sessionId
+                            })
+                        });
+                    }
+
+                    const data = await response.json();
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    this.addMessage('assistant', data.response);
+                    this.saveMessageToLocalStorage('assistant', data.response);
+
+                    // Clear file input after successful upload
+                    if (file) {
+                        fileInput.value = '';
+                        document.querySelector('.flex.gap-4 button').innerHTML = '<svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>';
+                    }
+                } catch (error) {
+                    this.addMessage('assistant', `Error: ${error.message}`);
+                    this.saveMessageToLocalStorage('assistant', `Error: ${error.message}`);
+                } finally {
+                    this.sendButton.disabled = false;
+                }
+            }
+
+            // Modify the clearChat method
+            async clearChat() {
+                try {
+                    await fetch('/api/clear', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            sessionId: this.sessionId
+                        })
+                    });
+                    this.chatContainer.innerHTML = '';
+                    localStorage.removeItem('chatHistory'); // Clear local storage
+                } catch (error) {
+                    console.error('Failed to clear chat:', error);
+                }
+            }
+        }
+        // Initialize the chat interface
+        const chat = new ChatInterface();
+    </script>
+</body>
+</html>
